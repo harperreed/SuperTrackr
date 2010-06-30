@@ -11,18 +11,20 @@ from google.appengine.ext.webapp import xmpp_handlers
 from google.appengine.ext.webapp import template
 from google.appengine.ext import db
 from google.appengine.api import urlfetch
+from google.appengine.api.labs import taskqueue
 
 
-SUPERFEEDR_LOGIN = ""
-SUPERFEEDR_PASSWORD = ""
+
+SUPERFEEDR_LOGIN = "supertrackr"
+SUPERFEEDR_PASSWORD = "4fb2252d11fde80fe3a77c3878839f4c"
 
 ##
 # the function that sends subscriptions/unsubscriptions to Superfeedr
-def superfeedr(mode, subscription):
+def superfeedr(mode, keyword):
   post_data = {
       'hub.mode' : mode,
-      'hub.callback' : "http://notifixlite.appspot.com/hubbub/" + subscription.key().name(),
-      'hub.topic' : subscription.feed, 
+      'hub.callback' : "http://supertrackr.appspot.com/hubbub/" + keyword.key().name(),
+      'hub.topic' : keyword.feed, 
       'hub.verify' : 'sync',
       'hub.verify_token' : '',
   }
@@ -33,15 +35,44 @@ def superfeedr(mode, subscription):
                   method=urlfetch.POST,
                   headers={"Authorization": "Basic "+ base64string, 'Content-Type': 'application/x-www-form-urlencoded'},
                   deadline=10)
-  logging.info('Result of %s to %s => %s (%d)',mode, subscription.feed, result.content, result.status_code )
+  logging.info('Result of %s to %s => %s (%d)',mode, keyword.feed, result.content, result.status_code )
   
   return result
 
+def get_or_add_keyword(keyword_value):
+    logging.info('#Getting keyword '+keyword_value)
+    try:
+        query = Keyword.all()
+        query.filter('keyword =', keyword_value)
+        keyword = query[0]
+        logging.debug('#keyword found')
+    except:
+        logging.debug('#instantiating keyword '+keyword_value)
+        key = hashlib.sha224(keyword_value).hexdigest()
+        keyword = Keyword(key_name=key, keyword=keyword_value)
+        keyword.keyword = keyword_value
+        keyword.feed = "http://superfeedr.com/track/"+keyword_value+"/"
+        keyword.save()
+        result = superfeedr("subscribe", keyword)
+    return keyword
+    
+ 
+def track_keyword(keyword_value, jid):
+    logging.debug("getting jid")
+    logging.debug(jid)
+    key = hashlib.sha224(keyword_value + jid).hexdigest()
+    keyword = get_or_add_keyword(keyword_value)
+    subscription = Subscription(key_name=key, keyword=keyword, jid=jid)
+    subscription.put() # saves the subscription
 
-##
+class Keyword(db.Model):
+  keyword = db.StringProperty()
+  feed = db.LinkProperty()
+  created_at = db.DateTimeProperty(auto_now_add=True)
+
 # The subscription model that matches a feed and a jid.
 class Subscription(db.Model):
-  feed = db.LinkProperty(required=True)
+  keyword = db.ReferenceProperty(Keyword, collection_name='subscribers')
   jid = db.StringProperty(required=True)
   created_at = db.DateTimeProperty(required=True, auto_now_add=True)
 
@@ -56,34 +87,78 @@ class MainPage(webapp.RequestHandler):
   def get(self):
     self.Render("index.html")
 
-##
+# The web app interface
+class FeedReceiver(webapp.RequestHandler):
+  def post(self):
+    feed_sekret = self.request.get('feed_sekret')
+    feed_body = self.request.get('feed_body')
+    data = feedparser.parse(feed_body)
+    keyword = Keyword.get_by_key_name(feed_sekret)
+      
+    logging.info('Found %d entries in %s', len(data.entries), keyword.feed)
+    
+    for entry in data.entries:
+        title =  entry.get('title', '')
+        link = entry.get('link', '')
+        post_params = {
+            'link': link,
+            'title' : title,
+            'feed_sekret': feed_sekret
+        }
+        logging.info('Found entry with title = "%s", link = "%s"', title, link)
+        logging.debug('sending on to track queue')
+
+        taskqueue.Task(url='/api/track_receiver', params=post_params).add(queue_name='apiwork')
+
+# The web app interface
+class TrackResponder(webapp.RequestHandler):
+  
+    def post(self):
+        user_address = self.request.get('user_address')
+        msg = self.request.get('msg')
+        status_code = xmpp.send_message(user_address, msg)
+        pass
+
+# The web app interface
+class TrackReceiver(webapp.RequestHandler):
+  
+  def post(self):
+    link = self.request.get('link')
+    title = self.request.get('title')
+    feed_sekret = self.request.get('feed_sekret')
+
+    #do bitly stuff here
+    keyword = Keyword.get_by_key_name(feed_sekret)
+    subscribers = keyword.subscribers
+    for subscription in subscribers:
+        user_address = subscription.jid
+        msg = title + "\n" + link
+
+        post_params = {
+                "msg":msg,
+                "user_address":user_address,
+        }
+        taskqueue.Task(url='/api/track_responder', params=post_params).add(queue_name='trackmessages')
+        logging.debug(post_params)
+
 # The HubbubSusbcriber
 class HubbubSubscriber(webapp.RequestHandler):
 
   ##
   # Called upon notification
   def post(self, feed_sekret):
-    subscription = Subscription.get_by_key_name(feed_sekret)
-    if(subscription == None):
+    keyword = Keyword.get_by_key_name(feed_sekret)
+    if(keyword == None):
       self.response.set_status(404)
       self.response.out.write("Sorry, no feed."); 
       
     else:
-      body = self.request.body.decode('utf-8')
-      data = feedparser.parse(self.request.body)
-      
-      logging.info('Found %d entries in %s', len(data.entries), subscription.feed)
-    
-      for entry in data.entries:
-        link = entry.get('link', '')
-        title = entry.get('title', '')
-        logging.info('Found entry with title = "%s", '
-                   'link = "%s"',
-                   title, link)
-        user_address = subscription.jid
-        msg = title + "\n" + link
-        status_code = xmpp.send_message(user_address, msg)
-          
+      post_params = {
+            "feed_sekret": feed_sekret,
+            "feed_body" : self.request.body,
+            
+            }
+      taskqueue.Task(url='/api/feed_receiver', params=post_params).add(queue_name='feedreceiver')
       self.response.set_status(200)
       self.response.out.write("Aight. Saved."); 
   
@@ -96,26 +171,22 @@ class HubbubSubscriber(webapp.RequestHandler):
 class XMPPHandler(xmpp_handlers.CommandHandler):
   
   # Asking to subscribe to a feed
-  def subscribe_command(self, message=None):
+  def track_command(self, message=None):
     message = xmpp.Message(self.request.POST)
-    subscriber = message.sender.rpartition("/")[0]
-    subscription = Subscription(key_name=hashlib.sha224(message.arg + subscriber).hexdigest(), feed=message.arg, jid=subscriber)
-    result = superfeedr("subscribe", subscription)
-    if result.status_code == 204:
-      subscription.put() # saves the subscription
-      message.reply("Well done! You're subscribed to " + message.arg)
-    else:
-      message.reply("Sorry, couldn't susbcribe to " + message.arg)
+    logging.debug(message.sender)
+    subscriber = message.sender#.rpartition("/")[0]
+    track_keyword(message.arg, subscriber)
+    message.reply("Well done! You're tracking " + message.arg)
     
   ##
   # Asking to unsubscribe to a feed
-  def unsubscribe_command(self, message=None):
+  def remove_command(self, message=None):
     message = xmpp.Message(self.request.POST)
     subscriber = message.sender.rpartition("/")[0]
     subscription = Subscription.get_by_key_name(hashlib.sha224(message.arg + subscriber).hexdigest())
     result = superfeedr("unsubscribe", subscription)
     subscription.delete() # saves the subscription
-    message.reply("Well done! You're not subscribed anymore to " + message.arg)
+    message.reply("REMOVED!! You're no longer tracking " + message.arg)
 
   ##
   # List subscriptions by page
@@ -127,7 +198,7 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
     query = Subscription.all().filter("jid =",subscriber).order("-created_at")
     count = query.count()
     if count == 0:
-      message.reply("Seems you subscribed nothing yet. Type\n  /subscribe http://twitter.com/statuses/user_timeline/43417156.rss\nto play around.")
+      message.reply("Seems like you are not tracking any keywords yet. Type\n  /track superfeedr\nto play around.")
     else:
       page_index = int(message.arg or 1)
       if count%10 == 0:
@@ -138,7 +209,7 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
       page_index = min(page_index, pages_count)
       offset = (page_index - 1) * 10 
       subscriptions = query.fetch(10, offset)
-      message.reply("Your have %d subscriptions in total: page %d/%d \n" % (count,page_index,pages_count))
+      message.reply("Your have %d tracked keywords in total: page %d/%d \n" % (count,page_index,pages_count))
       feed_list = [s.feed for s in subscriptions]
       message.reply("\n".join(feed_list))
 
@@ -146,19 +217,17 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
   # Asking for help
   def hello_command(self, message=None):
     message = xmpp.Message(self.request.POST)
-    message.reply("Oh, Hai! Notifixlite is a small app to help you subscribe to your favorite feeds and get their updates via IM. It's powered by Superfeedr (http://superfeedr.com) and its magic powers!. ")
-    message.reply("Make it better : http://github.com/superfeedr/notifixlight.")
     message.reply("For more info, type /help.")
   
   ##
   # Asking for help
   def help_command(self, message=None):
     message = xmpp.Message(self.request.POST)
-    help_msg = "It's not even alpha ready, but you could play with following commands:\n\n" \
-               "/hello -> about me\n\n" \
-	       "/subscribe <url>\n/unsubscribe <url> -> subscribe or unsubscribe to a feed\n\n" \
-	       "/ls <page_index> ->  list subscriptions, default to page 1\n\n" \
-	       "/help ->  get help message\n"
+    help_msg = "" \
+           "/track <keyword>\n/remove <keyword> -> subscribe or unsubscribe to keywords \n\n" \
+           "/ls ->  list tracked keywords \n\n" \
+           "/help ->  get help message\n\n" \
+           "Warning: Tracking lots of keywords or generic keywords will *blow your shit up*!\n"
     message.reply(help_msg)
     message.reply(message.body)
   
@@ -166,15 +235,17 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
   # All other commants
   def unhandled_command(self, message=None):
     message = xmpp.Message(self.request.POST)
-    message.reply("Please, type /help for help.")
+    message.reply("Please type /help for help.")
   
-  ##
-  # Sent for any message.
-  def text_message(self, message=None):
-    message = xmpp.Message(self.request.POST)
-    message.reply("Echooooo (when you're done playing, type /help) > " + message.body)
-
-application = webapp.WSGIApplication([('/_ah/xmpp/message/chat/', XMPPHandler), ('/', MainPage), ('/hubbub/(.*)', HubbubSubscriber)],debug=True)
+route = [
+        ('/_ah/xmpp/message/chat/', XMPPHandler), 
+        ('/', MainPage), 
+        ('/hubbub/(.*)', HubbubSubscriber),
+        ('/api/track_responder', TrackResponder),
+        ('/api/track_receiver', TrackReceiver),
+        ('/api/feed_receiver', FeedReceiver),
+        ]
+application = webapp.WSGIApplication(route,debug=True)
 
 def main():
   run_wsgi_app(application)
