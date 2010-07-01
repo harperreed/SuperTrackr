@@ -12,7 +12,7 @@ from google.appengine.ext.webapp import template
 from google.appengine.ext import db
 from google.appengine.api import urlfetch
 from google.appengine.api.labs import taskqueue
-
+from google.appengine.api import memcache
 
 
 SUPERFEEDR_LOGIN = "supertrackr"
@@ -65,6 +65,25 @@ def track_keyword(keyword_value, jid):
     subscription = Subscription(key_name=key, keyword=keyword, jid=jid)
     subscription.put() # saves the subscription
 
+def remove_track_keyword(keyword_value, jid):
+    logging.info("getting jid")
+    logging.info(jid)
+    subscription_key = hashlib.sha224(keyword_value + jid).hexdigest()
+    try:
+        subscription = Subscription.get_by_key_name(subscription_key)
+        keyword = subscription.keyword
+        subscription.delete()
+        keywords = keyword.subscribers.fetch(10)
+        if len(keywords)==0:
+            result = superfeedr("unsubscribe", keyword)
+            keyword.delete()
+    except:
+        pass
+
+    #print keyword
+    #subscription = Subscription(key_name=key, keyword=keyword, jid=jid)
+    #subscription.put() # saves the subscription
+
 class Keyword(db.Model):
   keyword = db.StringProperty()
   feed = db.LinkProperty()
@@ -87,28 +106,46 @@ class MainPage(webapp.RequestHandler):
   def get(self):
     self.Render("index.html")
 
+  def post(self):
+    jid = self.request.get('jid')
+    if jid.find("@") == -1:
+        self.response.headers['Content-Type'] = 'text/plain'
+        self.response.out.write(jid + " doesn't seem to be a valid jabber address")
+    else:
+        msg = "Welcome to supertrackr@appspot.com. You can track all sorts of keywords and what not. \n\nStart by sending:\n/track <keyword>"
+        status_code = xmpp.send_message(jid, msg)
+        logging.info("--")
+        logging.info(status_code)
+        logging.info("--")
+        self.response.headers['Content-Type'] = 'text/plain'
+        self.response.out.write('message sent to ' + jid + '.<br /> you will receive an IM from supertrackr@appspot.com')
+        self.response.out.write(status_code)
+    
+
 # The web app interface
 class FeedReceiver(webapp.RequestHandler):
   def post(self):
     feed_sekret = self.request.get('feed_sekret')
-    feed_body = self.request.get('feed_body')
+    mem_key = self.request.get('mem_key')
+    feed_body = memcache.get(mem_key)
     data = feedparser.parse(feed_body)
     keyword = Keyword.get_by_key_name(feed_sekret)
-      
-    logging.info('Found %d entries in %s', len(data.entries), keyword.feed)
-    
-    for entry in data.entries:
-        title =  entry.get('title', '')
-        link = entry.get('link', '')
-        post_params = {
-            'link': link,
-            'title' : title,
-            'feed_sekret': feed_sekret
-        }
-        logging.info('Found entry with title = "%s", link = "%s"', title, link)
-        logging.debug('sending on to track queue')
+    try:
+        logging.info('Found %d entries in %s', len(data.entries), keyword.feed)
+        for entry in data.entries:
+            title =  entry.get('title', '')
+            link = entry.get('link', '')
+            post_params = {
+                'link': link,
+                'title' : title,
+                'feed_sekret': feed_sekret
+            }
+            logging.info('Found entry with title = "%s", link = "%s"', title, link)
+            logging.debug('sending on to track queue')
 
-        taskqueue.Task(url='/api/track_receiver', params=post_params).add(queue_name='apiwork')
+            taskqueue.Task(url='/api/track_receiver', params=post_params).add(queue_name='apiwork')
+    except:
+        pass
 
 # The web app interface
 class TrackResponder(webapp.RequestHandler):
@@ -129,17 +166,20 @@ class TrackReceiver(webapp.RequestHandler):
 
     #do bitly stuff here
     keyword = Keyword.get_by_key_name(feed_sekret)
-    subscribers = keyword.subscribers
-    for subscription in subscribers:
-        user_address = subscription.jid
-        msg = title + "\n" + link
+    try:
+        subscribers = keyword.subscribers
+        for subscription in subscribers:
+            user_address = subscription.jid
+            msg = title + "\n" + link
 
-        post_params = {
-                "msg":msg,
-                "user_address":user_address,
-        }
-        taskqueue.Task(url='/api/track_responder', params=post_params).add(queue_name='trackmessages')
-        logging.debug(post_params)
+            post_params = {
+                    "msg":msg,
+                    "user_address":user_address,
+            }
+            taskqueue.Task(url='/api/track_responder', params=post_params).add(queue_name='trackmessages')
+            logging.debug(post_params)
+    except:
+        pass
 
 # The HubbubSusbcriber
 class HubbubSubscriber(webapp.RequestHandler):
@@ -153,9 +193,11 @@ class HubbubSubscriber(webapp.RequestHandler):
       self.response.out.write("Sorry, no feed."); 
       
     else:
+      key = hashlib.sha224(self.request.body).hexdigest()
+      memcache.add(key, self.request.body)
       post_params = {
             "feed_sekret": feed_sekret,
-            "feed_body" : self.request.body,
+            "mem_key": key,
             
             }
       taskqueue.Task(url='/api/feed_receiver', params=post_params).add(queue_name='feedreceiver')
@@ -176,16 +218,17 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
     logging.debug(message.sender)
     subscriber = message.sender#.rpartition("/")[0]
     track_keyword(message.arg, subscriber)
-    message.reply("Well done! You're tracking " + message.arg)
+    message.reply("Well done! You're now tracking " + message.arg)
     
   ##
   # Asking to unsubscribe to a feed
   def remove_command(self, message=None):
     message = xmpp.Message(self.request.POST)
-    subscriber = message.sender.rpartition("/")[0]
-    subscription = Subscription.get_by_key_name(hashlib.sha224(message.arg + subscriber).hexdigest())
-    result = superfeedr("unsubscribe", subscription)
-    subscription.delete() # saves the subscription
+    subscriber = message.sender#.rpartition("/")[0]
+    remove_track_keyword(message.arg, subscriber)
+    #subscription = Subscription.get_by_key_name(hashlib.sha224(message.arg + subscriber).hexdigest())
+    #result = superfeedr("unsubscribe", subscription)
+    #subscription.delete() # saves the subscription
     message.reply("REMOVED!! You're no longer tracking " + message.arg)
 
   ##
@@ -194,7 +237,7 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
   # page default to 1
   def ls_command(self, message=None):
     message = xmpp.Message(self.request.POST)
-    subscriber = message.sender.rpartition("/")[0]
+    subscriber = message.sender#.rpartition("/")[0]
     query = Subscription.all().filter("jid =",subscriber).order("-created_at")
     count = query.count()
     if count == 0:
@@ -210,7 +253,7 @@ class XMPPHandler(xmpp_handlers.CommandHandler):
       offset = (page_index - 1) * 10 
       subscriptions = query.fetch(10, offset)
       message.reply("Your have %d tracked keywords in total: page %d/%d \n" % (count,page_index,pages_count))
-      feed_list = [s.feed for s in subscriptions]
+      feed_list = [s.keyword.keyword for s in subscriptions]
       message.reply("\n".join(feed_list))
 
   ##

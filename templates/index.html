@@ -2,11 +2,151 @@
 "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<title>SuperTrackr.com</title>
+<title>supertrackr.com</title>
+
+<style>
+body {
+  font: normal 14px/18px helvetica, arial, hirakakupro-w3, osaka, "ms pgothic", sans-serif;    
+  padding: 0;
+  margin: 0;
+  height:100%;
+}
+
+.container{
+    margin-left: auto;
+    margin-right: auto;
+    width: 800px;
+    text-align: center;
+}
+
+.forms{
+    text-align: center;
+
+}
+
+h1{
+    font-size: 100px;
+    padding: 0px;
+    margin-bottom: 0px;
+}
+h3{
+    margin-left: 200px;
+
+}
+
+
+.jid{
+    font-size: 60px;
+    width: 600px;
+}
+
+.instructions{
+font-style: italic;
+}
+
+
+.footer{
+
+    font-size: 12px;
+    background: #000;
+    color: #eee;
+    text-align: center;
+    }
+
+.footer-container{
+position: absolute;
+width: 100%;
+bottom:0px;
+    
+
+}
+.caveat{
+text-align: right;
+font-size: 10px;
+padding-right: 10px;
+}
+
+.footer a{
+text-decoration: none;
+color: #fff;
+}
+
+a{
+text-decoration: none;
+color: #000;
+
+}
+</style>
 
 </head>
 <body>
+
+    <div class="container">
+    <h1>supertrackr</h1>
+    <h3>track anything on the internet in realtime<a href="#caveat">*</a></h3>
+
+
+    <p class="instructions">To get started, enter your jabber id (google talk id, etc) and press enter</p>
+    <p class="forms">
+    <form id="jid_form">
+
+        <input type="text" value="" class="jid" id="jid">
+        <div class="result"></div>
+    </form>
+
+    </p>
+    </div>
+
+
+    <div class="footer-container">
+        <div class="caveat"> 
+            <a name="caveat">
+        * - anything on the internet that is using superfeedr/pubsubhubbub to distribute its content.
+            </a>
+        </div>
+    <div class="footer">
+        &copy; <a href="http://nata2.org">Harper Reed</a>. Made with <a href="http://code.google.com/appengine">GAE</a> and <a href="http://superfeedr.com/">SuperFeedr</a> Technology. <br /> 
+        you can do it too
+
+    </div>
+    </div>
+<script type="text/javascript" src="http://www.google.com/jsapi"></script> 
+<script type="text/javascript"> 
+        google.load("jquery", "1.3.2");
+</script> 
+<script>
+$(document).ready(function(){	
+
+$("#jid_form").submit(function(){  
+
+    $.post('/', { jid: $("#jid").val()  }, function(data) {
+        $('.result').html(data);
+    });
+   
+    return false;
     
+   
+});
+});
+
+
+</script>
+
+
+<script type="text/javascript">
+
+  var _gaq = _gaq || [];
+  _gaq.push(['_setAccount', 'UA-70650-51']);
+  _gaq.push(['_trackPageview']);
+
+  (function() {
+    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+  })();
+
+</script>
+
 </body>
 
 </html>
