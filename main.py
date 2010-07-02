@@ -113,6 +113,7 @@ class MainPage(webapp.RequestHandler):
         self.response.out.write(jid + " doesn't seem to be a valid jabber address")
     else:
         msg = "Welcome to supertrackr@appspot.com. You can track all sorts of keywords and what not. \n\nStart by sending:\n/track <keyword>"
+        invite = xmpp.send_invite(jid)
         status_code = xmpp.send_message(jid, msg)
         logging.info("--")
         logging.info(status_code)
