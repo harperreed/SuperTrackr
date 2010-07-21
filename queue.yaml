@@ -1,10 +1,10 @@
 queue:
 - name: apiwork 
-  rate: 10/s
+  rate: 50/s
   bucket_size: 5
 - name: feedreceiver 
-  rate: 10/s
+  rate: 50/s
   bucket_size: 5
 - name: trackmessages 
-  rate: 10/s
+  rate: 50/s
   bucket_size: 5
