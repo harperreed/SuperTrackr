@@ -15,8 +15,8 @@ from google.appengine.api.labs import taskqueue
 from google.appengine.api import memcache
 
 
-SUPERFEEDR_LOGIN = "supertrackr"
-SUPERFEEDR_PASSWORD = "4fb2252d11fde80fe3a77c3878839f4c"
+SUPERFEEDR_LOGIN = ""
+SUPERFEEDR_PASSWORD = ""
 
 ##
 # the function that sends subscriptions/unsubscriptions to Superfeedr
